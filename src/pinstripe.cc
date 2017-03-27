@@ -12,9 +12,13 @@
 
 #include <string>
 #include <iostream>
+
+#include "rodsClient.h"
+
 class Pinstripe {
 public:
   static std::string basedir;
+  rcComm_t *connection;
   
   static int getattr(const char *path, struct stat *stbuf)
   {
@@ -246,7 +250,38 @@ int main(int argc, char* argv[]) {
   pinstripe_oper.releasedir = Pinstripe::releasedir;
   pinstripe_oper.init = Pinstripe::init;
   pinstripe_oper.destroy = Pinstripe::destroy;
-  
+
+  rodsEnv env;
+  int status = getRodsEnv(&env);
+  if (status < 0) {
+    fprintf(stderr, "getRodsEnv failed.\n");
+    return 1;
+  }
+  printRodsEnv(stdout);
+
+  rErrMsg_t errorMessage;
+  ps.connection = rcConnect(env.rodsHost, env.rodsPort, env.rodsUserName,
+                	 env.rodsZone, RECONN_TIMEOUT, &errorMessage);
+  if (ps.connection == NULL) {
+    fprintf(stderr, "Failed in rcConnect: %s", errorMessage.msg);
+    return 1;
+  }
+
+  status = clientLogin(ps.connection);
+  if (status != 0) {
+    fprintf(stderr, "clientLogin failed.\n");
+    printErrorStack(ps.connection->rError);
+    rcDisconnect(ps.connection);
+    return 1;
+  }
+
   ps.basedir = "/home/merimus/fuse/rootdir";
-  return fuse_main(argc, argv, &pinstripe_oper, NULL);
+  int res = fuse_main(argc, argv, &pinstripe_oper, NULL);
+   
+  printErrorStack(ps.connection->rError);
+  rcDisconnect(ps.connection);
+  return res;
 }
+
+
+ 
