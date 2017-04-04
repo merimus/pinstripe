@@ -14,6 +14,7 @@
 #include <iostream>
 
 #include "rodsClient.h"
+#include "irods_environment_properties.hpp"
 
 class Pinstripe {
 public:
@@ -259,6 +260,18 @@ int main(int argc, char* argv[]) {
   }
   printRodsEnv(stdout);
 
+  {
+    auto &env = irods::environment_properties::instance();
+    env.capture();
+    std::string source_dir;
+    irods::error res = env.get_property("pinstripe_source_dir", source_dir);
+    if (!res.ok()) {
+      fprintf(stderr, "Failed to get pinstripe_source_dir property.\n");
+      return 1;
+    }
+    ps.basedir = source_dir.c_str();
+  }
+  
   rErrMsg_t errorMessage;
   ps.connection = rcConnect(env.rodsHost, env.rodsPort, env.rodsUserName,
                 	 env.rodsZone, RECONN_TIMEOUT, &errorMessage);
@@ -275,7 +288,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  ps.basedir = "/home/merimus/fuse/rootdir";
   int res = fuse_main(argc, argv, &pinstripe_oper, NULL);
    
   printErrorStack(ps.connection->rError);
