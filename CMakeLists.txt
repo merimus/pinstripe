@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR) #CPACK_DEBIAN_<COMPONENT>_PACKAGE_NAME
+cmake_minimum_required(VERSION 2.8.0 FATAL_ERROR) #CPACK_DEBIAN_<COMPONENT>_PACKAGE_NAME
 find_package(IRODS 4.2.0 EXACT REQUIRED CONFIG)
 
 set(CMAKE_C_COMPILER ${IRODS_EXTERNALS_FULLPATH_CLANG}/bin/clang)
@@ -20,7 +20,7 @@ find_package(FUSE REQUIRED)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -stdlib=libc++")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -stdlib=libc++")
-add_compile_options(-nostdinc++ -Wall -Wextra -Werror -Wno-unused-parameter)
+add_compile_options(-std=c++11 -nostdinc++ -Wall -Wextra -Werror -Wno-unused-parameter)
 link_libraries(c++abi)
 include_directories(${IRODS_EXTERNALS_FULLPATH_CLANG}/include/c++/v1)
 

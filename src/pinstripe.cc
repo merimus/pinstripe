@@ -15,16 +15,79 @@
 
 #include "rodsClient.h"
 #include "irods_environment_properties.hpp"
+#include "phyPathReg.h"
+#include "dataObjUnlink.h"
+#include "modDataObjMeta.h"
 
 class Pinstripe {
 public:
-  static std::string basedir;
-  rcComm_t *connection;
-  
+  // The local directory which will be mounted in the overlay.
+  static std::string localdir;
+  // The path of the directory on the resource server.
+  static std::string serverdir;
+  // The path under which the file will be registered.
+  static std::string regdir;
+
+  static rcComm_t *connection;
+ 
+  static void registerFile(std::string path) {
+    dataObjInp_t phyPathRegInp; 
+    bzero(&phyPathRegInp, sizeof (phyPathRegInp)); 
+    std::string objpath = regdir + path;
+    rstrcpy(phyPathRegInp.objPath, objpath.c_str(), MAX_NAME_LEN); 
+    std::string filepath = serverdir + path;
+    addKeyVal(&phyPathRegInp.condInput, FILE_PATH_KW, filepath.c_str()); 
+    addKeyVal(&phyPathRegInp.condInput, FORCE_FLAG_KW, "");
+    //    addKeyVal (&dataObjInp.condInput, DEST_RESC_NAME_KW, rescource.c_str()); 
+    int status = rcPhyPathReg(connection, &phyPathRegInp); 
+    if (status < 0) {
+      fprintf(stderr, "rcPhyPathReg failed.\n");
+      printErrorStack(connection->rError);
+    }
+  }
+
+  static void unregisterFile(const char *path) {
+    std::string objPath = regdir + path;
+    dataObjInp_t dataObjInp; 
+    bzero(&dataObjInp, sizeof (dataObjInp)); 
+    rstrcpy(dataObjInp.objPath, objPath.c_str(), MAX_NAME_LEN);
+    dataObjInp.oprType = UNREG_OPR;
+    addKeyVal(&dataObjInp.condInput, FORCE_FLAG_KW, ""); 
+    int status = rcDataObjUnlink (connection, &dataObjInp); 
+    if (status < 0) { 
+      fprintf(stderr, "rcDataObjUnlink failed.\n");
+      printErrorStack(connection->rError);
+    }
+  }
+ 
+  static void modMetaData(const char *path, const char* key, const char* val) {
+    std::string objPath = regdir + path;
+    std::string filePath = serverdir + path;
+    dataObjInfo_t objInfo;
+    bzero(&objInfo, sizeof(objInfo));
+    rstrcpy(objInfo.filePath, filePath.c_str(), MAX_NAME_LEN);
+    rstrcpy(objInfo.objPath, objPath.c_str(), MAX_NAME_LEN);
+
+    keyValPair_t keyVal;
+    bzero(&keyVal, sizeof(keyValPair_t));
+    addKeyVal(&keyVal, key, val);
+
+    modDataObjMeta_t modDataObjMeta;
+    bzero(&modDataObjMeta, sizeof(modDataObjMeta_t));
+    modDataObjMeta.dataObjInfo = &objInfo;
+    modDataObjMeta.regParam = &keyVal;
+
+    int status = rcModDataObjMeta(connection, &modDataObjMeta);
+    if (status < 0) {
+      fprintf(stderr, "rcModDataObjMeta failed.\n");
+      printErrorStack(connection->rError);
+    }
+  }
+
   static int getattr(const char *path, struct stat *stbuf)
   {
-    std::string realpath = basedir + path;
-    std::cout << "getattr " << basedir << "," << path << std::endl;
+    std::string realpath = localdir + path;
+    std::cout << "getattr " << localdir << "," << path << std::endl;
     std::cout << "realpath " << realpath << std::endl;
     int res = lstat(realpath.c_str(), stbuf);
     if (res == -1) {
@@ -35,17 +98,18 @@ public:
   }
 
   static int mknod(const char* path, mode_t mode, dev_t dev) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::mknod(realpath.c_str(), mode, dev);
     if (res == -1) {
       perror("mknod");
       return -errno;
     }
+    registerFile(path);
     return 0;
   }
 
   static int mkdir(const char *path, mode_t mode) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::mkdir(realpath.c_str(), mode);
     if (res == -1) {
       perror("mkdir");
@@ -55,17 +119,18 @@ public:
   }
 
   static int unlink(const char *path) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::unlink(realpath.c_str());
     if (res == -1) {
       perror("unlink");
       return -errno;
     }
+    unregisterFile(path);
     return 0;
   }
 
   static int rmdir(const char *path) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::rmdir(realpath.c_str());
     if (res == -1) {
       perror("rmdir");
@@ -75,18 +140,20 @@ public:
   }
   
   static int rename(const char *path, const char *newpath) {
-    std::string realpath = basedir + path;
-    std::string newrealpath = basedir + newpath;
+    std::string realpath = localdir + path;
+    std::string newrealpath = localdir + newpath;
     int res = ::rename(realpath.c_str(), newrealpath.c_str());
     if (res == -1) {
       perror("rename");
       return -errno;
     }
+    unregisterFile(path);
+    registerFile(newpath);
     return 0;
   }
 
   static int chmod(const char *path, mode_t mode) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::chmod(realpath.c_str(), mode);
     if (res == -1) {
       perror("chmod");
@@ -96,7 +163,7 @@ public:
   }
 
   static int chown(const char *path, uid_t uid, gid_t gid) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::chown(realpath.c_str(), uid, gid);
     if (res == -1) {
       perror("chown");
@@ -106,27 +173,29 @@ public:
   }
 
   static int truncate(const char *path, off_t newsize) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::truncate(realpath.c_str(), newsize);
     if (res == -1) {
       perror("truncate");
       return -errno;
     }
+    modMetaData(path, DATA_SIZE_KW, std::to_string(newsize).c_str());
     return 0;
   }
 
   static int utime(const char *path, struct utimbuf *ut) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::utime(realpath.c_str(), ut);
     if (res == -1) {
       perror("utime");
       return -errno;
     }
+    modMetaData(path, DATA_SIZE_KW, std::to_string(ut->modtime).c_str());
     return 0;
   }
 
   static int open(const char *path, struct fuse_file_info *ffi) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = ::open(realpath.c_str(), ffi->flags);
     if (res == -1) {
       perror("open");
@@ -143,7 +212,7 @@ public:
       perror("read");
       return -errno;
     }
-    return 0;
+    return res;
   }
 
   static int write(const char *path, const char *buf, size_t size,
@@ -153,14 +222,45 @@ public:
       perror("write");
       return -errno;
     }
-    return 0;
+
+    struct stat stat_buf;
+    if (fstat(ffi->fh, &stat_buf) == -1) {
+      perror("fstat");
+      return res;
+    }
+    modMetaData(path, DATA_SIZE_KW, std::to_string(stat_buf.st_size).c_str());
+    return res;
   }
 
   static int statfs(const char* path, struct statvfs *statv) {
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     int res = statvfs(realpath.c_str(), statv);
     if (res == -1) {
       perror("statfs");
+      return -errno;
+    }
+    return 0;
+  }
+
+  static int flush(const char* path, struct fuse_file_info *ffi) {
+    int res = ::close(dup(ffi->fh));
+    if (res == -1) {
+      perror("flush");
+      return -errno;
+    }
+    registerFile(path);
+    return 0;
+  }
+
+  static int fsync(const char* path, int ds, struct fuse_file_info *ffi) {
+    int res;
+    if (ds != 0) {
+      res = ::fdatasync(ffi->fh);
+    } else {
+      res = ::fsync(ffi->fh);
+    }
+    if (res == -1) {
+      perror("fsync");
       return -errno;
     }
     return 0;
@@ -177,10 +277,10 @@ public:
 
   static int opendir(const char *path, struct fuse_file_info *ffi) {
     // We should either mount with default permissions or check perms here.
-    std::string realpath = basedir + path;
+    std::string realpath = localdir + path;
     DIR *dir  = ::opendir(realpath.c_str());
     if (dir == 0) {
-      perror("statfs");
+      perror("opendir");
       return -errno;
     }
     ffi->fh = (intptr_t)dir;
@@ -224,7 +324,10 @@ public:
   }
 };
 
-std::string Pinstripe::basedir;
+std::string Pinstripe::localdir;
+std::string Pinstripe::serverdir;
+std::string Pinstripe::regdir;
+rcComm_t *Pinstripe::connection;
 
 int main(int argc, char* argv[]) {
   Pinstripe ps;
@@ -245,6 +348,8 @@ int main(int argc, char* argv[]) {
   pinstripe_oper.read = Pinstripe::read;
   pinstripe_oper.write = Pinstripe::write;
   pinstripe_oper.statfs = Pinstripe::statfs;
+  pinstripe_oper.flush = Pinstripe::flush;
+  pinstripe_oper.fsync = Pinstripe::fsync;
   pinstripe_oper.release = Pinstripe::release;
   pinstripe_oper.opendir = Pinstripe::opendir;
   pinstripe_oper.readdir = Pinstripe::readdir;
@@ -260,6 +365,11 @@ int main(int argc, char* argv[]) {
   }
   printRodsEnv(stdout);
 
+  ps.localdir = "/mnt/data";
+  ps.serverdir = "/data";
+  ps.regdir = "/tempZone/home/merimus";
+
+  /*
   {
     auto &env = irods::environment_properties::instance();
     env.capture();
@@ -271,6 +381,7 @@ int main(int argc, char* argv[]) {
     }
     ps.basedir = source_dir.c_str();
   }
+  */
   
   rErrMsg_t errorMessage;
   ps.connection = rcConnect(env.rodsHost, env.rodsPort, env.rodsUserName,
