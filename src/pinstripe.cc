@@ -87,8 +87,6 @@ public:
   static int getattr(const char *path, struct stat *stbuf)
   {
     std::string realpath = localdir + path;
-    std::cout << "getattr " << localdir << "," << path << std::endl;
-    std::cout << "realpath " << realpath << std::endl;
     int res = lstat(realpath.c_str(), stbuf);
     if (res == -1) {
       perror("getattr");
@@ -215,21 +213,41 @@ public:
     return res;
   }
 
+  static int read_buf(const char *path, struct fuse_bufvec **bufp,
+		      size_t size, off_t offset, struct fuse_file_info *ffi) {
+    struct fuse_bufvec *src;
+    src = (fuse_bufvec*)malloc(sizeof(struct fuse_bufvec));
+    if (src == NULL) {
+      return -ENOMEM;
+    }
+
+    *src = FUSE_BUFVEC_INIT(size);
+    src->buf[0].flags = (fuse_buf_flags)(FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK);
+    src->buf[0].fd = ffi->fh;
+    src->buf[0].pos = offset;
+    *bufp = src;
+    return 0;
+  }
+
   static int write(const char *path, const char *buf, size_t size,
-		   off_t offset, struct fuse_file_info *ffi) {
+		  off_t offset, struct fuse_file_info *ffi) {
     int res = pwrite(ffi->fh, buf, size, offset);
     if (res == -1) {
       perror("write");
       return -errno;
     }
 
-    struct stat stat_buf;
-    if (fstat(ffi->fh, &stat_buf) == -1) {
-      perror("fstat");
-      return res;
-    }
-    modMetaData(path, DATA_SIZE_KW, std::to_string(stat_buf.st_size).c_str());
     return res;
+  }
+
+  static int write_buf(const char *path, struct fuse_bufvec *buf,
+		       off_t offset, struct fuse_file_info *ffi) {
+    struct fuse_bufvec dst = FUSE_BUFVEC_INIT(fuse_buf_size(buf));
+    dst.buf[0].flags = (fuse_buf_flags)(FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK);
+    dst.buf[0].fd = ffi->fh;
+    dst.buf[0].pos = offset;
+
+    return fuse_buf_copy(&dst, buf, FUSE_BUF_SPLICE_NONBLOCK);
   }
 
   static int statfs(const char* path, struct statvfs *statv) {
@@ -313,11 +331,20 @@ public:
     return 0;
   }
 
-  // access
+  static int access(const char* path, int mask) {
+    std::string realpath = localdir + path;
+    int ret = ::access(realpath.c_str(), mask);
+    if (ret == -1) {
+      perror("access");
+      return -errno;
+    }
+    return 0;
+  }
+
   // fgetattr
 
   static void *init(struct fuse_conn_info *conn) {
-    return 0;
+    return NULL;
   }
   static void destroy(void *userdata) {
     return;
@@ -345,8 +372,10 @@ int main(int argc, char* argv[]) {
   pinstripe_oper.truncate = Pinstripe::truncate;
   pinstripe_oper.utime = Pinstripe::utime;
   pinstripe_oper.open = Pinstripe::open;
-  pinstripe_oper.read = Pinstripe::read;
-  pinstripe_oper.write = Pinstripe::write;
+  //  pinstripe_oper.read = Pinstripe::read;
+  pinstripe_oper.read_buf = Pinstripe::read_buf;
+  //  pinstripe_oper.write = Pinstripe::write;
+  pinstripe_oper.write_buf = Pinstripe::write_buf;
   pinstripe_oper.statfs = Pinstripe::statfs;
   pinstripe_oper.flush = Pinstripe::flush;
   pinstripe_oper.fsync = Pinstripe::fsync;
@@ -354,6 +383,7 @@ int main(int argc, char* argv[]) {
   pinstripe_oper.opendir = Pinstripe::opendir;
   pinstripe_oper.readdir = Pinstripe::readdir;
   pinstripe_oper.releasedir = Pinstripe::releasedir;
+  pinstripe_oper.access = Pinstripe::access;
   pinstripe_oper.init = Pinstripe::init;
   pinstripe_oper.destroy = Pinstripe::destroy;
 
